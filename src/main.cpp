@@ -15,6 +15,7 @@
 #include "device.h"
 #ifdef ESP_PLATFORM
   #include "keys.h"
+  #include "../modem/modem.h" // fix: just to compile the modem code because the linker needs the code
 #endif
 #include "led.h"
 #include "crypt.h"
