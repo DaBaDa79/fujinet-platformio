@@ -21,6 +21,17 @@ enum class cassette_mode_t
     record
 };
 
+// Ref. https://a8cas.sourceforge.net/format-cas.html
+// numeric values of the 4-byte headers so they can be used in switch .. case
+#define FUJI_CHUNK_HEADER_FUJI  0x494a5546  // 'FUJI' - tape description
+#define FUJI_CHUNK_HEADER_BAUD  0x64756162  // 'baud' - baudrate for subsequent SIO records
+#define FUJI_CHUNK_HEADER_DATA  0x61746164  // 'data' - standard SIO record
+#define FUJI_CHUNK_HEADER_FSK   0x206B7366  // 'fsk ' - non-standard SIO signals
+#define FUJI_CHUNK_HEADER_PWMS  0x736D7770  // 'pwms' - settings for subsequent turbo records
+#define FUJI_CHUNK_HEADER_PWMC  0x636D7770  // 'pwmc' - sequence of turbo signals
+#define FUJI_CHUNK_HEADER_PWML  0x6C6D7770  // 'pwml' - sequence of raw PWM states
+#define FUJI_CHUNK_HEADER_PWMD  0x646D7770  // 'pwmd' - turbo record with data
+
 // software uart conops for cassette
 // wait for falling edge and set fsk_clock
 // find next falling edge and compute period
@@ -128,9 +139,50 @@ private:
     size_t tape_offset = 0;
     struct tape_FUJI_hdr
     {
-        uint8_t chunk_type[4];
+        uint32_t chunk_type;
         uint16_t chunk_length;
         uint16_t irg_length;
+        uint8_t data[];
+    };
+    struct tape_baud_hdr
+    {
+        uint32_t chunk_type;
+        uint16_t chunk_length;
+        uint16_t baudrate;
+    };
+    struct tape_pwms_hdr
+    {
+        uint32_t chunk_type;
+        uint16_t chunk_length;
+        uint8_t settings;
+        uint8_t reserved;
+        uint16_t samplerate;
+    };
+    struct tape_pwmc_data
+     {
+        uint8_t pulse_length;
+        uint16_t pulse_count;
+     };
+    struct tape_pwmc_hdr
+    {
+        uint32_t chunk_type;
+        uint16_t chunk_length;
+        uint16_t silence_length;
+        tape_pwmc_data data[];
+    };
+    struct tape_pwml_hdr
+    {
+        uint32_t chunk_type;
+        uint16_t chunk_length;
+        uint16_t silence_length;
+        uint16_t data[];
+    };
+    struct tape_pwmd_hdr
+    {
+        uint32_t chunk_type;
+        uint16_t chunk_length;
+        uint8_t pulse_0_length;
+        uint8_t pulse_1_length;
         uint8_t data[];
     };
 
@@ -140,7 +192,8 @@ private:
         unsigned char turbo : 1;
     } tape_flags;
 
-    uint8_t atari_sector_buffer[256];
+//    uint8_t atari_sector_buffer[256];
+    uint8_t atari_sector_buffer[30000];
 
     void Clear_atari_sector_buffer(uint16_t len);
 
@@ -151,6 +204,8 @@ private:
     void check_for_FUJI_file();
     size_t send_FUJI_tape_block(size_t offset);
     size_t receive_FUJI_tape_block(size_t offset);
+
+    uint16_t samplerate;
 };
 
 #endif

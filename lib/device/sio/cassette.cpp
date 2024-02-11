@@ -45,6 +45,9 @@ uint8_t boxidx = 0;
 #ifdef ESP_PLATFORM
 static void IRAM_ATTR cas_isr_handler(void *arg)
 {
+#ifdef DEBUG
+        Debug_println("cas_isr_handler called");
+#endif
     uint32_t gpio_num = (uint32_t)arg;
     if (gpio_num == UART2_RX)
     {
@@ -92,7 +95,7 @@ int8_t softUART::service(uint8_t b)
             received_byte = 0; // clear data
             baud_clock = t;    // approx beginning of start bit
 #ifdef DEBUG
-//            Debug_println("Start bit received!");
+            Debug_println("Start bit received!");
 #endif
         }
     }
@@ -105,7 +108,7 @@ int8_t softUART::service(uint8_t b)
                 buffer[index_in++] = received_byte;
                 state_counter = STARTBIT;
 #ifdef DEBUG
-//                Debug_printf("received %02X\n", received_byte);
+                Debug_printf("received %02X\n", received_byte);
 #endif
                 if (b != 0)
                 {
@@ -121,8 +124,8 @@ int8_t softUART::service(uint8_t b)
                 received_byte |= (bb << (state_counter - 1));
                 state_counter++;
 #ifdef DEBUG
-//                Debug_printf("bit %u ", state_counter - 1);
-//                Debug_printf("%u\n ", b);
+                Debug_printf("bit %u ", state_counter - 1);
+                Debug_printf("%u\n ", b);
 #endif
             }
         }
@@ -425,7 +428,7 @@ size_t sioCassette::send_tape_block(size_t offset)
 void sioCassette::check_for_FUJI_file()
 {
     struct tape_FUJI_hdr *hdr = (struct tape_FUJI_hdr *)atari_sector_buffer;
-    uint8_t *p = hdr->chunk_type;
+    //uint8_t *p = hdr->chunk_type;
 
     // faccess_offset(FILE_ACCESS_READ, 0, sizeof(struct tape_FUJI_hdr));
 #ifdef ESP_PLATFORM
@@ -435,10 +438,12 @@ void sioCassette::check_for_FUJI_file()
     _file->seek(0, SEEK_SET);
     _file->read(atari_sector_buffer, 1, sizeof(struct tape_FUJI_hdr));
 #endif
-    if (p[0] == 'F' && //search for FUJI header
+/*     if (p[0] == 'F' && //search for FUJI header
         p[1] == 'U' &&
         p[2] == 'J' &&
         p[3] == 'I')
+ */  
+    if (hdr->chunk_type == FUJI_CHUNK_HEADER_FUJI)
     {
         tape_flags.FUJI = 1;
             Debug_println("FUJI File Found");
@@ -466,133 +471,167 @@ size_t sioCassette::send_FUJI_tape_block(size_t offset)
     uint16_t gap, len;
     uint16_t buflen = 256;
     unsigned char first = 1;
-    struct tape_FUJI_hdr *hdr = (struct tape_FUJI_hdr *)atari_sector_buffer;
-    uint8_t *p = hdr->chunk_type;
+    struct tape_FUJI_hdr *hdr       = (struct tape_FUJI_hdr *)atari_sector_buffer;
+    struct tape_baud_hdr *hdr_baud  = (struct tape_baud_hdr *)atari_sector_buffer;
+    struct tape_pwms_hdr *hdr_pwms  = (struct tape_pwms_hdr *)atari_sector_buffer;
+    struct tape_pwmc_hdr *hdr_pwmc  = (struct tape_pwmc_hdr *)atari_sector_buffer;
+    struct tape_pwml_hdr *hdr_pwml  = (struct tape_pwml_hdr *)atari_sector_buffer;
+    struct tape_pwmd_hdr *hdr_pwmd  = (struct tape_pwmd_hdr *)atari_sector_buffer;
 
     size_t starting_offset = offset;
 
     while (offset < filesize) // FileInfo.vDisk->size)
     {
         // looking for a data header while handling baud changes along the way
-#ifdef DEBUG
         Debug_printf("Offset: %u\r\n", offset);
-#endif
-#ifdef ESP_PLATFORM
         fseek(_file, offset, SEEK_SET);
         fread(atari_sector_buffer, 1, sizeof(struct tape_FUJI_hdr), _file);
-#else
-        _file->seek(offset, SEEK_SET);
-        _file->read(atari_sector_buffer, 1, sizeof(struct tape_FUJI_hdr));
-#endif
         len = hdr->chunk_length;
 
-        if (p[0] == 'd' && //is a data header?
-            p[1] == 'a' &&
-            p[2] == 't' &&
-            p[3] == 'a')
+        switch (hdr->chunk_type)
         {
-            block++;
-            break;
+            case FUJI_CHUNK_HEADER_FUJI:
+                Debug_println("  FUJI header - tape description");
+                break;
+
+            case FUJI_CHUNK_HEADER_DATA:
+                Debug_println("  data header - standard SIO record");
+                block++;
+
+                gap = hdr->irg_length; //save GAP
+                len = hdr->chunk_length;
+                Debug_printf("Baud: %u Length: %u Gap: %u ", baud, len, gap);
+
+                // TO DO : turn on LED
+                fnLedManager.set(eLed::LED_BUS, true);
+                while (gap--)
+                {
+                    fnSystem.delay_microseconds(999); // shave off a usec for the MOTOR pin check
+                    if (has_pulldown() && !motor_line() && gap > 1000)
+                    {
+                        fnLedManager.set(eLed::LED_BUS, false);
+                        return starting_offset;
+                    }
+                }
+                fnLedManager.set(eLed::LED_BUS, false);
+
+                // wait until after delay for new line so can see it in timestamp
+                Debug_println();
+
+                if (offset < filesize)
+                {
+                    // data record
+                    Debug_printf("Block %u\r\n", block);
+                    // read block in 256 byte (or fewer) chunks
+                    offset += sizeof(struct tape_FUJI_hdr); //skip chunk hdr
+                    while (len)
+                    {
+                        if (len > 256)
+                        {
+                            buflen = 256;
+                            len -= 256;
+                        }
+                        else
+                        {
+                            buflen = len;
+                            len = 0;
+                        }
+
+                        fseek(_file, offset, SEEK_SET);
+                        r = fread(atari_sector_buffer, 1, buflen, _file);
+                        offset += r;
+
+                        Debug_printf("Sending %u bytes\r\n", buflen);
+                        // for (int i = 0; i < buflen; i++)
+                        //     Debug_printf("%02x ", atari_sector_buffer[i]);
+                        FN_BUS_LINK.write(atari_sector_buffer, buflen);
+                        FN_BUS_LINK.flush(); // wait for all data to be sent just like a tape
+                        // Debug_printf("\r\n");
+
+                        if (first && atari_sector_buffer[2] == 0xfe)
+                        {
+                            // resets block counter for next section
+                            block = 0;
+                        }
+                        first = 0;
+                    }
+                }
+                else
+                {
+                    //block = 0;
+                    offset = 0;
+                }
+                return (offset);
+                break;
+
+            case FUJI_CHUNK_HEADER_BAUD:
+                Debug_println("  baud header - baudrate for subsequent SIO records");
+                baud = hdr_baud->baudrate;
+                FN_BUS_LINK.set_baudrate(baud);
+                Debug_printf("    Baudrate: %u\r\n", baud);
+                break;
+
+            case FUJI_CHUNK_HEADER_FSK:
+                Debug_println("  fsk header - non-standard SIO signals");
+                break;        
+
+            case FUJI_CHUNK_HEADER_PWMS:
+                Debug_println("  pwms header - settings for subsequent turbo records");
+                offset += sizeof(struct tape_FUJI_hdr); //skip chunk hdr
+                fseek(_file, offset, SEEK_SET);
+                r = fread(&(hdr_pwms->samplerate), 1, hdr_pwms->chunk_length, _file);
+                offset += r;
+                samplerate = hdr_pwms->samplerate;
+                // TBD: settings (pulse_type, bit_order)
+                Debug_printf("    Samplerate: %u", samplerate); Debug_println();
+                return(offset);
+                break;        
+
+            case FUJI_CHUNK_HEADER_PWMC:
+                Debug_println("  pwmc header - sequence of turbo signals");
+                Debug_printf("    Silence: %u Pulse blocks: %u\r\n", hdr_pwmc->silence_length, hdr_pwmc->chunk_length/3);
+                offset += sizeof(struct tape_FUJI_hdr); //skip chunk hdr
+                fseek(_file, offset, SEEK_SET);
+                r = fread(hdr_pwmc->data, 1, hdr_pwmc->chunk_length, _file);
+                offset += r;
+                for (uint16_t cnt_data=0; cnt_data<hdr_pwmc->chunk_length/3; cnt_data++)
+                {
+                   Debug_printf("      Pulse length: %u Pulse count: %u\r\n", hdr_pwmc->data[cnt_data].pulse_length,hdr_pwmc->data[cnt_data].pulse_count);
+                   Debug_printf("      %x %x %x %x\r\n", hdr->data[0], hdr->data[1], hdr->data[2], hdr->data[3]);
+                }
+                // TBD: send data
+                return(offset);
+                break;
+            case FUJI_CHUNK_HEADER_PWML:
+                Debug_println("  pwml header - sequence of raw PWM states");
+                Debug_printf("    Silence: %u PWM states: %u\r\n", hdr_pwml->silence_length, hdr_pwml->chunk_length/2);
+                offset += sizeof(struct tape_FUJI_hdr); //skip chunk hdr
+                fseek(_file, offset, SEEK_SET);
+                r = fread(hdr_pwml->data, 1, hdr_pwml->chunk_length, _file);
+                offset += r;
+                // TBD: send data
+                return(offset);
+                break;
+
+            case FUJI_CHUNK_HEADER_PWMD:
+                Debug_println("  pwmd header - turbo record with data");
+                Debug_printf("    Pulse 0 length: %u Pulse 1 length: %u Data length: %u\r\n", hdr_pwmd->pulse_0_length, hdr_pwmd->pulse_1_length, hdr_pwmd->chunk_length);
+                offset += sizeof(struct tape_FUJI_hdr); //skip chunk hdr
+                fseek(_file, offset, SEEK_SET);
+                r = fread(hdr_pwmd->data, 1, hdr_pwmd->chunk_length, _file);
+                offset += r;
+                // TBD: send data
+                return(offset);
+                break;
+
+            default:
+                Debug_println("  UNKNWON HEADER");
+                break;
         }
-        else if (p[0] == 'b' && //is a baud header?
-                 p[1] == 'a' &&
-                 p[2] == 'u' &&
-                 p[3] == 'd')
-        {
-            if (tape_flags.turbo) //ignore baud hdr
-                continue;
-            baud = hdr->irg_length;
-            FN_BUS_LINK.set_baudrate(baud);
-        }
+        
         offset += sizeof(struct tape_FUJI_hdr) + len;
     }
 
-    // TO DO : check that "data" record was actually found - not done by SDrive until after IRG by checking offset<filesize
-
-    gap = hdr->irg_length; //save GAP
-    len = hdr->chunk_length;
-#ifdef DEBUG
-    Debug_printf("Baud: %u Length: %u Gap: %u ", baud, len, gap);
-#endif
-
-    // TO DO : turn on LED
-    fnLedManager.set(eLed::LED_BUS, true);
-    while (gap--)
-    {
-        fnSystem.delay_microseconds(999); // shave off a usec for the MOTOR pin check
-        if (has_pulldown() && !motor_line() && gap > 1000)
-        {
-            fnLedManager.set(eLed::LED_BUS, false);
-            return starting_offset;
-        }
-    }
-    fnLedManager.set(eLed::LED_BUS, false);
-
-#ifdef DEBUG
-    // wait until after delay for new line so can see it in timestamp
-    Debug_printf("\r\n");
-#endif
-
-    if (offset < filesize)
-    {
-        // data record
-#ifdef DEBUG
-        Debug_printf("Block %u\r\n", block);
-#endif
-        // read block in 256 byte (or fewer) chunks
-        offset += sizeof(struct tape_FUJI_hdr); //skip chunk hdr
-        while (len)
-        {
-            if (len > 256)
-            {
-                buflen = 256;
-                len -= 256;
-            }
-            else
-            {
-                buflen = len;
-                len = 0;
-            }
-
-#ifdef ESP_PLATFORM
-            fseek(_file, offset, SEEK_SET);
-            r = fread(atari_sector_buffer, 1, buflen, _file);
-#else
-            _file->seek(offset, SEEK_SET);
-            r = _file->read(atari_sector_buffer, 1, buflen);
-#endif
-            offset += r;
-
-#ifdef DEBUG
-            Debug_printf("Sending %u bytes\r\n", buflen);
-            for (int i = 0; i < buflen; i++)
-                Debug_printf("%02x ", atari_sector_buffer[i]);
-#endif
-            FN_BUS_LINK.write(atari_sector_buffer, buflen);
-            FN_BUS_LINK.flush(); // wait for all data to be sent just like a tape
-#ifdef DEBUG
-            Debug_printf("\r\n");
-#endif
-
-            if (first && atari_sector_buffer[2] == 0xfe)
-            {
-                // resets block counter for next section
-                block = 0;
-            }
-            first = 0;
-        }
-        /*         if (block == 0)
-        {
-            // TO DO : why does Sdrive do this?
-            //_delay_ms(200); //add an end gap to be sure
-            fnSystem.delay(200);
-        } */
-    }
-    else
-    {
-        //block = 0;
-        offset = 0;
-    }
     return (offset);
 }
 
@@ -648,12 +687,12 @@ size_t sioCassette::receive_FUJI_tape_block(size_t offset)
         b = casUART.read(); // data
         atari_sector_buffer[idx++] = b;
 #ifdef DEBUG
-//        Debug_printf(" %02x", b);
+        Debug_printf(" %02x", b);
 #endif
         i++;
     }
 #ifdef DEBUG
-//    Debug_printf("\n");
+    Debug_printf("\n");
 #endif
 
     while (!casUART.available()) // && motor_line()
