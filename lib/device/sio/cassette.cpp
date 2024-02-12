@@ -34,6 +34,7 @@
 
 // copied from fuUART.cpp - figure out better way
 #define UART2_RX 33
+#define UART2_TX 21
 #define ESP_INTR_FLAG_DEFAULT 0
 #define BOXLEN 5
 
@@ -438,11 +439,6 @@ void sioCassette::check_for_FUJI_file()
     _file->seek(0, SEEK_SET);
     _file->read(atari_sector_buffer, 1, sizeof(struct tape_FUJI_hdr));
 #endif
-/*     if (p[0] == 'F' && //search for FUJI header
-        p[1] == 'U' &&
-        p[2] == 'J' &&
-        p[3] == 'I')
- */  
     if (hdr->chunk_type == FUJI_CHUNK_HEADER_FUJI)
     {
         tape_flags.FUJI = 1;
@@ -467,6 +463,7 @@ void sioCassette::check_for_FUJI_file()
 
 size_t sioCassette::send_FUJI_tape_block(size_t offset)
 {
+#ifdef ESP_PLATFORM
     size_t r;
     uint16_t gap, len;
     uint16_t buflen = 256;
@@ -597,9 +594,39 @@ size_t sioCassette::send_FUJI_tape_block(size_t offset)
                 for (uint16_t cnt_data=0; cnt_data<hdr_pwmc->chunk_length/3; cnt_data++)
                 {
                    Debug_printf("      Pulse length: %u Pulse count: %u\r\n", hdr_pwmc->data[cnt_data].pulse_length,hdr_pwmc->data[cnt_data].pulse_count);
-                   Debug_printf("      %x %x %x %x\r\n", hdr->data[0], hdr->data[1], hdr->data[2], hdr->data[3]);
                 }
-                // TBD: send data
+
+                Debug_println("    silence...");
+                while (hdr_pwmc->silence_length--)
+                {
+                    fnSystem.delay_microseconds(999);
+                    if (has_pulldown() && !motor_line() && hdr_pwmc->silence_length > 1000)
+                    {
+                        fnLedManager.set(eLed::LED_BUS, false);
+                        return starting_offset;
+                    }
+                }
+
+                // set SIO port GPIO mode so we can send pulses
+                fnSystem.set_pin_mode(UART2_TX, gpio_mode_t::GPIO_MODE_OUTPUT);
+                Debug_println("    pulses...");
+                fnLedManager.set(eLed::LED_BUS, true);
+                for (uint16_t cnt_data=0; cnt_data<hdr_pwmc->chunk_length/3; cnt_data++)
+                {
+                    uint32_t pulse_length_time = hdr_pwmc->data[cnt_data].pulse_length * 1000000 / samplerate;
+                    Debug_printf("      Pulse length in us: %u\r\n", pulse_length_time);
+                    for (uint16_t cnt_pulses=0; cnt_pulses < hdr_pwmc->data[cnt_data].pulse_count; cnt_pulses++)
+                    {
+                        fnSystem.digital_write(UART2_TX,1);
+                        fnSystem.delay_microseconds(pulse_length_time);
+                        fnSystem.digital_write(UART2_TX,0);
+                        fnSystem.delay_microseconds(pulse_length_time);
+                    }
+                }
+                // set back SIO port to UART mode
+                FN_BUS_LINK.set_baudrate(CASSETTE_BAUDRATE);
+                fnLedManager.set(eLed::LED_BUS, false);
+
                 return(offset);
                 break;
             case FUJI_CHUNK_HEADER_PWML:
@@ -633,6 +660,9 @@ size_t sioCassette::send_FUJI_tape_block(size_t offset)
     }
 
     return (offset);
+#else
+    // FUJI tape files on other platforms?
+#endif
 }
 
 size_t sioCassette::receive_FUJI_tape_block(size_t offset)

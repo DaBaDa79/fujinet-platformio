@@ -157,12 +157,12 @@ private:
         uint8_t settings;
         uint8_t reserved;
         uint16_t samplerate;
-    };
+    } __attribute__((packed));
     struct tape_pwmc_data
      {
         uint8_t pulse_length;
         uint16_t pulse_count;
-     };
+     } __attribute__((packed));
     struct tape_pwmc_hdr
     {
         uint32_t chunk_type;
