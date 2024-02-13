@@ -593,9 +593,9 @@ size_t sioCassette::send_FUJI_tape_block(size_t offset)
                 // TBD: settings (pulse_type, bit_order)
                 Debug_printf("    Samplerate: %u", samplerate); Debug_println();
                 // set SIO port GPIO mode so we can send pulses
-                // fnSystem.set_pin_mode(UART2_TX, gpio_mode_t::GPIO_MODE_OUTPUT);
-                // fnSystem.digital_write(UART2_TX,1);
-                            
+                fnSystem.set_pin_mode(UART2_TX, gpio_mode_t::GPIO_MODE_OUTPUT);
+                fnSystem.digital_write(UART2_TX,1);
+/*                             
                 // Prepare and then apply the LEDC PWM timer configuration
                 ledc_timer = {
                     .speed_mode         = LEDC_MODE,
@@ -620,7 +620,7 @@ size_t sioCassette::send_FUJI_tape_block(size_t offset)
                     }
                 };
                 ESP_ERROR_CHECK(ledc_channel_config(&ledc_channel));
-
+ */
                 if (offset >= filesize)
                     offset = 0;
                 return(offset);
@@ -645,9 +645,10 @@ size_t sioCassette::send_FUJI_tape_block(size_t offset)
                 fnLedManager.set(eLed::LED_BUS, true);
                 for (uint16_t cnt_data=0; cnt_data<hdr_pwmc->chunk_length/3; cnt_data++)
                 {
-                    uint32_t pulse_length_time = hdr_pwmc->data[cnt_data].pulse_length * 1000000 / samplerate;
-                    uint32_t freq = samplerate / hdr_pwmc->data[cnt_data].pulse_length;
-                    Debug_printf("      Pulse length in us: %u Freq: %u\r\n", pulse_length_time, freq);
+                     uint32_t pulse_length_time = hdr_pwmc->data[cnt_data].pulse_length * 1000000 / samplerate;
+                    Debug_printf("      Pulse length in us: %u\r\n", pulse_length_time);
+/*                    uint32_t freq = samplerate / hdr_pwmc->data[cnt_data].pulse_length;
+                    Debug_printf("      Freq: %u\r\n", freq);
                     // Set duty to 50%
                     ESP_ERROR_CHECK(ledc_set_duty(LEDC_MODE, LEDC_CHANNEL, LEDC_DUTY));
                     // Set frequency
@@ -659,16 +660,17 @@ size_t sioCassette::send_FUJI_tape_block(size_t offset)
                     ESP_ERROR_CHECK(ledc_set_duty(LEDC_MODE, LEDC_CHANNEL, 0));
                     // Update duty to apply the new value
                     ESP_ERROR_CHECK(ledc_update_duty(LEDC_MODE, LEDC_CHANNEL));
+ */
+                    for (uint16_t cnt_pulses=0; cnt_pulses < hdr_pwmc->data[cnt_data].pulse_count; cnt_pulses++)
+                    {
 
-                    // for (uint16_t cnt_pulses=0; cnt_pulses < hdr_pwmc->data[cnt_data].pulse_count; cnt_pulses++)
-                    // {
-
-                    //     fnSystem.digital_write(UART2_TX,0);
-                    //     fnSystem.delay_microseconds(pulse_length_time);
-                    //     fnSystem.digital_write(UART2_TX,1);
-                    //     fnSystem.delay_microseconds(pulse_length_time);
-                    // }
+                        fnSystem.digital_write(UART2_TX,1);
+                        fnSystem.delay_microseconds(pulse_length_time / 2 - 1);
+                        fnSystem.digital_write(UART2_TX,0);
+                        fnSystem.delay_microseconds(pulse_length_time / 2 - 1);
+                    }
                 }
+                fnSystem.digital_write(UART2_TX,1);
                 fnLedManager.set(eLed::LED_BUS, false);
 
                 if (offset >= filesize)
@@ -690,12 +692,13 @@ size_t sioCassette::send_FUJI_tape_block(size_t offset)
                 {
                     edge1_length_time = hdr_pwml->data[cnt_data].edge1 * 1000000 / samplerate;
                     edge2_length_time = hdr_pwml->data[cnt_data].edge2 * 1000000 / samplerate;
-                    Debug_printf("      Edge1: %u Edge2: %u\r\n", edge1_length_time, edge2_length_time);
-                    fnSystem.digital_write(UART2_TX,0);
-                    fnSystem.delay_microseconds(edge1_length_time);
+                    Debug_printf("      Edge1 in us: %u Edge2 in us: %u\r\n", edge1_length_time, edge2_length_time);
                     fnSystem.digital_write(UART2_TX,1);
-                    fnSystem.delay_microseconds(edge2_length_time);
+                    fnSystem.delay_microseconds(edge1_length_time - 1);
+                    fnSystem.digital_write(UART2_TX,0);
+                    fnSystem.delay_microseconds(edge2_length_time - 1);
                 }
+                fnSystem.digital_write(UART2_TX,1);
                 fnLedManager.set(eLed::LED_BUS, false);
 
 
@@ -715,27 +718,30 @@ size_t sioCassette::send_FUJI_tape_block(size_t offset)
                 fnLedManager.set(eLed::LED_BUS, true);
                 edge1_length_time = hdr_pwmd->pulse_length_0 * 1000000 / samplerate / 2;
                 edge2_length_time = hdr_pwmd->pulse_length_1 * 1000000 / samplerate / 2;
-                Debug_printf("      Pulses...");
+                Debug_printf("    Edge 0 in us: %u Edge 1 in us: %u\r\n", edge1_length_time, edge2_length_time);
+                Debug_printf("      %u Pulses...", hdr_pwmd->chunk_length);
                 for (uint16_t cnt_data=0; cnt_data<hdr_pwmd->chunk_length; cnt_data++)
                 {
+                    Debug_printf(".");
                     for (uint8_t databit=0; databit<8; databit++)
                     {
-                        if (hdr_pwmd->data[cnt_data] & 0x80)
+                        if (!(hdr_pwmd->data[cnt_data] & 0x80))
                         {
-                            fnSystem.digital_write(UART2_TX,0);
-                            fnSystem.delay_microseconds(edge1_length_time);
                             fnSystem.digital_write(UART2_TX,1);
-                            fnSystem.delay_microseconds(edge1_length_time);
+                            fnSystem.delay_microseconds(edge1_length_time - 1);
+                            fnSystem.digital_write(UART2_TX,0);
+                            fnSystem.delay_microseconds(edge1_length_time - 1);
                         } else
                         {
-                            fnSystem.digital_write(UART2_TX,0);
-                            fnSystem.delay_microseconds(edge2_length_time);
                             fnSystem.digital_write(UART2_TX,1);
-                            fnSystem.delay_microseconds(edge2_length_time);
+                            fnSystem.delay_microseconds(edge2_length_time - 1);
+                            fnSystem.digital_write(UART2_TX,0);
+                            fnSystem.delay_microseconds(edge2_length_time - 1);
                         }
                         hdr_pwmd->data[cnt_data] <<= 1;
                     }
                 }
+                fnSystem.digital_write(UART2_TX,1);
                 fnLedManager.set(eLed::LED_BUS, false);
                 Debug_println();
 
