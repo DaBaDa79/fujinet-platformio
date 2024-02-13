@@ -170,21 +170,26 @@ private:
         uint16_t silence_length;
         tape_pwmc_data data[];
     };
+    struct tape_pwml_data
+     {
+        uint16_t edge1;
+        uint16_t edge2;
+     } __attribute__((packed));
     struct tape_pwml_hdr
     {
         uint32_t chunk_type;
         uint16_t chunk_length;
         uint16_t silence_length;
-        uint16_t data[];
+        tape_pwml_data data[];
     };
     struct tape_pwmd_hdr
     {
         uint32_t chunk_type;
         uint16_t chunk_length;
-        uint8_t pulse_0_length;
-        uint8_t pulse_1_length;
+        uint8_t pulse_length_0;
+        uint8_t pulse_length_1;
         uint8_t data[];
-    };
+    } __attribute__((packed));
 
     struct t_flags
     {
