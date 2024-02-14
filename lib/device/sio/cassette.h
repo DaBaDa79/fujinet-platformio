@@ -191,6 +191,12 @@ private:
         uint8_t data[];
     } __attribute__((packed));
 
+    struct tape_turbo_pwm_sequence
+    {
+        uint8_t set_bit;
+        uint16_t wait_microseconds;
+    };
+
     struct t_flags
     {
         unsigned char FUJI : 1;

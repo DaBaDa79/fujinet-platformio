@@ -13,7 +13,7 @@
 
 // TODO: merge/fix this at global level
 #ifdef ESP_PLATFORM
-#include "driver/ledc.h" // PWM support
+#include "httpService.h"
 
 #define FN_BUS_LINK fnUartBUS
 #else
@@ -465,13 +465,6 @@ void sioCassette::check_for_FUJI_file()
 size_t sioCassette::send_FUJI_tape_block(size_t offset)
 {
 #ifdef ESP_PLATFORM
-
-#define LEDC_TIMER              LEDC_TIMER_0
-#define LEDC_MODE               LEDC_LOW_SPEED_MODE
-#define LEDC_OUTPUT_IO          (UART2_TX) // GPIO of SIO_DIN
-#define LEDC_CHANNEL            LEDC_CHANNEL_0
-#define LEDC_DUTY_RES           LEDC_TIMER_8_BIT
-#define LEDC_DUTY               (32768)
     size_t r;
     uint16_t gap, len;
     uint16_t buflen = 256;
@@ -482,12 +475,18 @@ size_t sioCassette::send_FUJI_tape_block(size_t offset)
     struct tape_pwmc_hdr *hdr_pwmc  = (struct tape_pwmc_hdr *)atari_sector_buffer;
     struct tape_pwml_hdr *hdr_pwml  = (struct tape_pwml_hdr *)atari_sector_buffer;
     struct tape_pwmd_hdr *hdr_pwmd  = (struct tape_pwmd_hdr *)atari_sector_buffer;
+    uint32_t tape_turbo_buffer_len = 0;
     uint32_t edge1_length_time,edge2_length_time;
-    ledc_timer_config_t ledc_timer;
-    ledc_channel_config_t ledc_channel;
-
+    struct tape_turbo_pwm_sequence *tape_turbo_buffer = (tape_turbo_pwm_sequence *)(malloc(2000000));
     size_t starting_offset = offset;
+    uint16_t waitTime;
+    bool firstWait = true;
 
+    if (!tape_turbo_buffer)
+    {
+        Debug_println("Memory allocation failed");
+        return(0);
+    }
     while (offset < filesize) // FileInfo.vDisk->size)
     {
         // looking for a data header while handling baud changes along the way
@@ -500,6 +499,7 @@ size_t sioCassette::send_FUJI_tape_block(size_t offset)
         {
             case FUJI_CHUNK_HEADER_FUJI:
                 Debug_println("  FUJI header - tape description");
+                offset += sizeof(struct tape_FUJI_hdr) + len;
                 break;
 
             case FUJI_CHUNK_HEADER_DATA:
@@ -510,7 +510,6 @@ size_t sioCassette::send_FUJI_tape_block(size_t offset)
                 len = hdr->chunk_length;
                 Debug_printf("Baud: %u Length: %u Gap: %u ", baud, len, gap);
 
-                // TO DO : turn on LED
                 fnLedManager.set(eLed::LED_BUS, true);
                 while (gap--)
                 {
@@ -569,7 +568,7 @@ size_t sioCassette::send_FUJI_tape_block(size_t offset)
                     //block = 0;
                     offset = 0;
                 }
-                return (offset);
+                //return (offset);
                 break;
 
             case FUJI_CHUNK_HEADER_BAUD:
@@ -577,10 +576,12 @@ size_t sioCassette::send_FUJI_tape_block(size_t offset)
                 baud = hdr_baud->baudrate;
                 FN_BUS_LINK.set_baudrate(baud);
                 Debug_printf("    Baudrate: %u\r\n", baud);
+                offset += sizeof(struct tape_FUJI_hdr) + len;
                 break;
 
             case FUJI_CHUNK_HEADER_FSK:
                 Debug_println("  fsk header - non-standard SIO signals");
+                offset += sizeof(struct tape_FUJI_hdr) + len;
                 break;        
 
             case FUJI_CHUNK_HEADER_PWMS:
@@ -592,38 +593,13 @@ size_t sioCassette::send_FUJI_tape_block(size_t offset)
                 samplerate = hdr_pwms->samplerate;
                 // TBD: settings (pulse_type, bit_order)
                 Debug_printf("    Samplerate: %u", samplerate); Debug_println();
-                // set SIO port GPIO mode so we can send pulses
-                fnSystem.set_pin_mode(UART2_TX, gpio_mode_t::GPIO_MODE_OUTPUT);
-                fnSystem.digital_write(UART2_TX,1);
-/*                             
-                // Prepare and then apply the LEDC PWM timer configuration
-                ledc_timer = {
-                    .speed_mode         = LEDC_MODE,
-                    .duty_resolution    = LEDC_DUTY_RES,
-                    .timer_num          = LEDC_TIMER,
-                    .freq_hz            = samplerate,
-                    .clk_cfg            = LEDC_AUTO_CLK
-                };
-                ESP_ERROR_CHECK(ledc_timer_config(&ledc_timer));
 
-                // Prepare and then apply the LEDC PWM channel configuration
-                ledc_channel = {
-                    .gpio_num       = LEDC_OUTPUT_IO,
-                    .speed_mode     = LEDC_MODE,
-                    .channel        = LEDC_CHANNEL,
-                    .intr_type      = LEDC_INTR_DISABLE,
-                    .timer_sel      = LEDC_TIMER,
-                    .duty           = 0, // Set duty to 0%
-                    .hpoint         = 0,
-                    .flags          = {
-                        .output_invert  = 1
-                    }
-                };
-                ESP_ERROR_CHECK(ledc_channel_config(&ledc_channel));
- */
-                if (offset >= filesize)
-                    offset = 0;
-                return(offset);
+                // set SIO port GPIO mode so we can send pulses
+                //fnSystem.set_pin_mode(UART2_TX, gpio_mode_t::GPIO_MODE_OUTPUT);
+                //fnSystem.digital_write(UART2_TX,1);
+                // if (offset >= filesize)
+                //     offset = 0;
+                //return(offset);
                 break;        
 
             case FUJI_CHUNK_HEADER_PWMC:
@@ -639,43 +615,40 @@ size_t sioCassette::send_FUJI_tape_block(size_t offset)
                 }
 
                 Debug_println("    silence...");
-                fnSystem.delay_microseconds(hdr_pwmc->silence_length * 1000);
+                tape_turbo_buffer[tape_turbo_buffer_len].set_bit=0xff;
+                tape_turbo_buffer[tape_turbo_buffer_len].wait_microseconds=hdr_pwmc->silence_length;
+                tape_turbo_buffer_len++;
+//                fnSystem.delay_microseconds(hdr_pwmc->silence_length * 1000);
 
                 Debug_println("    pulses...");
-                fnLedManager.set(eLed::LED_BUS, true);
+                //fnLedManager.set(eLed::LED_BUS, true);
                 for (uint16_t cnt_data=0; cnt_data<hdr_pwmc->chunk_length/3; cnt_data++)
                 {
-                     uint32_t pulse_length_time = hdr_pwmc->data[cnt_data].pulse_length * 1000000 / samplerate;
+                    uint32_t pulse_length_time = hdr_pwmc->data[cnt_data].pulse_length * 1000000 / samplerate;
                     Debug_printf("      Pulse length in us: %u\r\n", pulse_length_time);
-/*                    uint32_t freq = samplerate / hdr_pwmc->data[cnt_data].pulse_length;
-                    Debug_printf("      Freq: %u\r\n", freq);
-                    // Set duty to 50%
-                    ESP_ERROR_CHECK(ledc_set_duty(LEDC_MODE, LEDC_CHANNEL, LEDC_DUTY));
-                    // Set frequency
-                    ESP_ERROR_CHECK(ledc_set_freq(LEDC_MODE, LEDC_TIMER, freq));
-                    // Update duty to apply the new value
-                    ESP_ERROR_CHECK(ledc_update_duty(LEDC_MODE, LEDC_CHANNEL));
-                    fnSystem.delay_microseconds(pulse_length_time*hdr_pwmc->data[cnt_data].pulse_count);
-                    // Set duty to 0%
-                    ESP_ERROR_CHECK(ledc_set_duty(LEDC_MODE, LEDC_CHANNEL, 0));
-                    // Update duty to apply the new value
-                    ESP_ERROR_CHECK(ledc_update_duty(LEDC_MODE, LEDC_CHANNEL));
- */
                     for (uint16_t cnt_pulses=0; cnt_pulses < hdr_pwmc->data[cnt_data].pulse_count; cnt_pulses++)
                     {
-
-                        fnSystem.digital_write(UART2_TX,1);
-                        fnSystem.delay_microseconds(pulse_length_time / 2 - 1);
-                        fnSystem.digital_write(UART2_TX,0);
-                        fnSystem.delay_microseconds(pulse_length_time / 2 - 1);
+                        tape_turbo_buffer[tape_turbo_buffer_len].set_bit=1;
+                        tape_turbo_buffer[tape_turbo_buffer_len].wait_microseconds=pulse_length_time / 2 - 1;
+                        tape_turbo_buffer_len++;
+                        tape_turbo_buffer[tape_turbo_buffer_len].set_bit=0;
+                        tape_turbo_buffer[tape_turbo_buffer_len].wait_microseconds=pulse_length_time / 2 - 1;
+                        tape_turbo_buffer_len++;
+                        // fnSystem.digital_write(UART2_TX,1);
+                        // fnSystem.delay_microseconds(pulse_length_time / 2 - 1);
+                        // fnSystem.digital_write(UART2_TX,0);
+                        // fnSystem.delay_microseconds(pulse_length_time / 2 - 1);
                     }
                 }
-                fnSystem.digital_write(UART2_TX,1);
-                fnLedManager.set(eLed::LED_BUS, false);
+                // tape_turbo_buffer[tape_turbo_buffer_len].set_bit=1;
+                // tape_turbo_buffer[tape_turbo_buffer_len].wait_microseconds=1;
+                // tape_turbo_buffer_len++;
+                //fnSystem.digital_write(UART2_TX,1);
+                //fnLedManager.set(eLed::LED_BUS, false);
 
-                if (offset >= filesize)
-                    offset = 0;
-                return(offset);
+                // if (offset >= filesize)
+                //     offset = 0;
+                //return(offset);
                 break;
             case FUJI_CHUNK_HEADER_PWML:
                 Debug_println("  pwml header - sequence of raw PWM states");
@@ -686,25 +659,39 @@ size_t sioCassette::send_FUJI_tape_block(size_t offset)
                 offset += r;
 
                 Debug_println("    silence...");
-                fnSystem.delay_microseconds(hdr_pwml->silence_length * 1000);
-                fnLedManager.set(eLed::LED_BUS, true);
+                tape_turbo_buffer[tape_turbo_buffer_len].set_bit=0xff;
+                tape_turbo_buffer[tape_turbo_buffer_len].wait_microseconds=hdr_pwml->silence_length;
+                tape_turbo_buffer_len++;
+                //fnSystem.delay_microseconds(hdr_pwml->silence_length * 1000);
+                //fnLedManager.set(eLed::LED_BUS, true);
                 for (uint16_t cnt_data=0; cnt_data<hdr_pwml->chunk_length/4; cnt_data++)
                 {
-                    edge1_length_time = hdr_pwml->data[cnt_data].edge1 * 1000000 / samplerate;
-                    edge2_length_time = hdr_pwml->data[cnt_data].edge2 * 1000000 / samplerate;
+                    edge1_length_time = hdr_pwml->data[cnt_data].edge1 * 1000000 / samplerate - 1;
+                    edge2_length_time = hdr_pwml->data[cnt_data].edge2 * 1000000 / samplerate - 1;
                     Debug_printf("      Edge1 in us: %u Edge2 in us: %u\r\n", edge1_length_time, edge2_length_time);
-                    fnSystem.digital_write(UART2_TX,1);
-                    fnSystem.delay_microseconds(edge1_length_time - 1);
-                    fnSystem.digital_write(UART2_TX,0);
-                    fnSystem.delay_microseconds(edge2_length_time - 1);
+
+                    tape_turbo_buffer[tape_turbo_buffer_len].set_bit=1;
+                    tape_turbo_buffer[tape_turbo_buffer_len].wait_microseconds=edge1_length_time;
+                    tape_turbo_buffer_len++;
+                    tape_turbo_buffer[tape_turbo_buffer_len].set_bit=0;
+                    tape_turbo_buffer[tape_turbo_buffer_len].wait_microseconds=edge2_length_time;
+                    tape_turbo_buffer_len++;
+
+                    // fnSystem.digital_write(UART2_TX,1);
+                    // fnSystem.delay_microseconds(edge1_length_time - 1);
+                    // fnSystem.digital_write(UART2_TX,0);
+                    // fnSystem.delay_microseconds(edge2_length_time - 1);
                 }
-                fnSystem.digital_write(UART2_TX,1);
-                fnLedManager.set(eLed::LED_BUS, false);
+                // tape_turbo_buffer[tape_turbo_buffer_len].set_bit=1;
+                // tape_turbo_buffer[tape_turbo_buffer_len].wait_microseconds=1;
+                // tape_turbo_buffer_len++;
+                //fnSystem.digital_write(UART2_TX,1);
+                //fnLedManager.set(eLed::LED_BUS, false);
 
 
-                if (offset >= filesize)
-                    offset = 0;
-                return(offset);
+                // if (offset >= filesize)
+                //     offset = 0;
+                //return(offset);
                 break;
 
             case FUJI_CHUNK_HEADER_PWMD:
@@ -715,51 +702,105 @@ size_t sioCassette::send_FUJI_tape_block(size_t offset)
                 r = fread(hdr_pwmd->data, 1, hdr_pwmd->chunk_length, _file);
                 offset += r;
 
-                fnLedManager.set(eLed::LED_BUS, true);
-                edge1_length_time = hdr_pwmd->pulse_length_0 * 1000000 / samplerate / 2;
-                edge2_length_time = hdr_pwmd->pulse_length_1 * 1000000 / samplerate / 2;
+                //fnLedManager.set(eLed::LED_BUS, true);
+                // edge1_length_time = hdr_pwmd->pulse_length_0 * 1000000 / samplerate / 2 - 1;
+                // edge2_length_time = hdr_pwmd->pulse_length_1 * 1000000 / samplerate / 2 - 1;
+                edge1_length_time = hdr_pwmd->pulse_length_0 * 1000000 / samplerate / 2 + 2;
+                edge2_length_time = hdr_pwmd->pulse_length_1 * 1000000 / samplerate / 2 + 2;
                 Debug_printf("    Edge 0 in us: %u Edge 1 in us: %u\r\n", edge1_length_time, edge2_length_time);
                 Debug_printf("      %u Pulses...", hdr_pwmd->chunk_length);
                 for (uint16_t cnt_data=0; cnt_data<hdr_pwmd->chunk_length; cnt_data++)
                 {
-                    Debug_printf(".");
                     for (uint8_t databit=0; databit<8; databit++)
                     {
                         if (!(hdr_pwmd->data[cnt_data] & 0x80))
                         {
-                            fnSystem.digital_write(UART2_TX,1);
-                            fnSystem.delay_microseconds(edge1_length_time - 1);
-                            fnSystem.digital_write(UART2_TX,0);
-                            fnSystem.delay_microseconds(edge1_length_time - 1);
+                            tape_turbo_buffer[tape_turbo_buffer_len].set_bit=1;
+                            tape_turbo_buffer[tape_turbo_buffer_len].wait_microseconds=edge1_length_time;
+                            tape_turbo_buffer_len++;
+                            tape_turbo_buffer[tape_turbo_buffer_len].set_bit=0;
+                            tape_turbo_buffer[tape_turbo_buffer_len].wait_microseconds=edge1_length_time;
+                            tape_turbo_buffer_len++;
+                            // fnSystem.digital_write(UART2_TX,1);
+                            // fnSystem.delay_microseconds(edge1_length_time - 1);
+                            // fnSystem.digital_write(UART2_TX,0);
+                            // fnSystem.delay_microseconds(edge1_length_time - 1);
                         } else
                         {
-                            fnSystem.digital_write(UART2_TX,1);
-                            fnSystem.delay_microseconds(edge2_length_time - 1);
-                            fnSystem.digital_write(UART2_TX,0);
-                            fnSystem.delay_microseconds(edge2_length_time - 1);
+                            tape_turbo_buffer[tape_turbo_buffer_len].set_bit=1;
+                            tape_turbo_buffer[tape_turbo_buffer_len].wait_microseconds=edge2_length_time;
+                            tape_turbo_buffer_len++;
+                            tape_turbo_buffer[tape_turbo_buffer_len].set_bit=0;
+                            tape_turbo_buffer[tape_turbo_buffer_len].wait_microseconds=edge2_length_time;
+                            tape_turbo_buffer_len++;
+                            // fnSystem.digital_write(UART2_TX,1);
+                            // fnSystem.delay_microseconds(edge2_length_time - 1);
+                            // fnSystem.digital_write(UART2_TX,0);
+                            // fnSystem.delay_microseconds(edge2_length_time - 1);
                         }
                         hdr_pwmd->data[cnt_data] <<= 1;
                     }
                 }
-                fnSystem.digital_write(UART2_TX,1);
-                fnLedManager.set(eLed::LED_BUS, false);
+                // tape_turbo_buffer[tape_turbo_buffer_len].set_bit=1;
+                // tape_turbo_buffer[tape_turbo_buffer_len].wait_microseconds=1;
+                // tape_turbo_buffer_len++;
+                //fnSystem.digital_write(UART2_TX,1);
+                //fnLedManager.set(eLed::LED_BUS, false);
                 Debug_println();
 
 
-                if (offset >= filesize)
-                    offset = 0;
-                return(offset);
+                // if (offset >= filesize)
+                //     offset = 0;
+                //return(offset);
                 break;
 
             default:
                 Debug_println("  UNKNWON HEADER");
+                offset += sizeof(struct tape_FUJI_hdr) + len;
                 break;
         }
         
-        offset += sizeof(struct tape_FUJI_hdr) + len;
+        //offset += sizeof(struct tape_FUJI_hdr) + len;
     }
-
-    return (offset);
+    Debug_printf("file finished. %u turbo sequences to send\r\n", tape_turbo_buffer_len);
+    fnSystem.set_pin_mode(UART2_TX, gpio_mode_t::GPIO_MODE_OUTPUT);
+    fnSystem.digital_write(UART2_TX,1);
+    Debug_println("Turning off Webserver");
+    fnHTTPD.stop();
+    Debug_printf("Sending turbo data...");
+    fnLedManager.set(eLed::LED_BUS, true);
+    portMUX_TYPE myMutex = portMUX_INITIALIZER_UNLOCKED;
+    for (uint32_t tape_turbo_buffer_pos=0; tape_turbo_buffer_pos<tape_turbo_buffer_len; tape_turbo_buffer_pos++)
+    {
+        if (tape_turbo_buffer[tape_turbo_buffer_pos].set_bit == 0xff)
+        {
+            waitTime=tape_turbo_buffer[tape_turbo_buffer_pos].wait_microseconds;
+            fnLedManager.set(eLed::LED_BUS, false);
+            if (firstWait)
+            {
+                if (waitTime>200)
+                    fnSystem.delay_microseconds((waitTime-200)*1000);
+                firstWait=false;
+            } else
+            {
+                if (waitTime>1)
+                    fnSystem.delay_microseconds((waitTime-1)*1000);
+            }
+        } else
+        {
+            taskENTER_CRITICAL(&myMutex);
+            //fnLedManager.set(eLed::LED_BUS, (tape_turbo_buffer[tape_turbo_buffer_pos].set_bit==1));
+            fnSystem.digital_write(UART2_TX,tape_turbo_buffer[tape_turbo_buffer_pos].set_bit);
+            fnSystem.delay_microseconds(tape_turbo_buffer[tape_turbo_buffer_pos].wait_microseconds);
+            taskEXIT_CRITICAL(&myMutex);
+        }
+    }
+    fnLedManager.set(eLed::LED_BUS, false);
+    Debug_println("done.");
+    Debug_println("Turning on Webserver again");
+    fnHTTPD.start();
+    free(tape_turbo_buffer);
+    return (0);
 #else
     // FUJI tape files on other platforms?
 #endif
