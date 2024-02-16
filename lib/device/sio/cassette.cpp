@@ -34,8 +34,7 @@
 #define CASSETTE_FILE "/csave" // basic program
 
 // copied from fuUART.cpp - figure out better way
-#define UART2_RX 33
-#define UART2_TX 21
+
 #define ESP_INTR_FLAG_DEFAULT 0
 #define BOXLEN 5
 
@@ -51,7 +50,7 @@ static void IRAM_ATTR cas_isr_handler(void *arg)
         Debug_println("cas_isr_handler called");
 #endif
     uint32_t gpio_num = (uint32_t)arg;
-    if (gpio_num == UART2_RX)
+    if (gpio_num == PIN_UART2_RX)
     {
         unsigned long now = fnSystem.micros();
         boxcar[boxidx++] = now - last; // interval between current and last ISR call
@@ -248,10 +247,10 @@ void sioCassette::sio_enable_cassette()
         open_cassette_file(&fnSDFAT); // hardcode SD card?
         FN_BUS_LINK.end();
 #ifdef ESP_PLATFORM
-        fnSystem.set_pin_mode(UART2_RX, gpio_mode_t::GPIO_MODE_INPUT, SystemManager::pull_updown_t::PULL_NONE, GPIO_INTR_ANYEDGE);
+        fnSystem.set_pin_mode(PIN_UART2_RX, gpio_mode_t::GPIO_MODE_INPUT, SystemManager::pull_updown_t::PULL_NONE, GPIO_INTR_ANYEDGE);
 
         // hook isr handler for specific gpio pin
-        if (gpio_isr_handler_add((gpio_num_t)UART2_RX, cas_isr_handler, (void *)UART2_RX) != ESP_OK)
+        if (gpio_isr_handler_add((gpio_num_t)PIN_UART2_RX, cas_isr_handler, (void *)PIN_UART2_RX) != ESP_OK)
             {
                 Debug_println("error attaching cassette data reading interrupt");
                 return;
@@ -260,7 +259,7 @@ void sioCassette::sio_enable_cassette()
 
 #ifdef DEBUG
         Debug_println("stopped hardware UART");
-        int a = fnSystem.digital_read(UART2_RX);
+        int a = fnSystem.digital_read(PIN_UART2_RX);
         Debug_printf("set pin to input. Value is %d\n", a);
         Debug_println("Writing FUJI File HEADERS");
 #endif
@@ -300,7 +299,7 @@ void sioCassette::sio_disable_cassette()
         else
         {
             close_cassette_file();
-            //TODO: gpio_isr_handler_remove((gpio_num_t)UART2_RX);
+            //TODO: gpio_isr_handler_remove((gpio_num_t)PIN_UART2_RX);
             FN_BUS_LINK.begin(SIO_STANDARD_BAUDRATE);
         }
 #ifdef DEBUG
@@ -595,8 +594,8 @@ size_t sioCassette::send_FUJI_tape_block(size_t offset)
                 Debug_printf("    Samplerate: %u", samplerate); Debug_println();
 
                 // set SIO port GPIO mode so we can send pulses
-                //fnSystem.set_pin_mode(UART2_TX, gpio_mode_t::GPIO_MODE_OUTPUT);
-                //fnSystem.digital_write(UART2_TX,1);
+                //fnSystem.set_pin_mode(PIN_UART2_TX, gpio_mode_t::GPIO_MODE_OUTPUT);
+                //fnSystem.digital_write(PIN_UART2_TX,1);
                 // if (offset >= filesize)
                 //     offset = 0;
                 //return(offset);
@@ -634,16 +633,16 @@ size_t sioCassette::send_FUJI_tape_block(size_t offset)
                         tape_turbo_buffer[tape_turbo_buffer_len].set_bit=0;
                         tape_turbo_buffer[tape_turbo_buffer_len].wait_microseconds=pulse_length_time / 2 - 1;
                         tape_turbo_buffer_len++;
-                        // fnSystem.digital_write(UART2_TX,1);
+                        // fnSystem.digital_write(PIN_UART2_TX,1);
                         // fnSystem.delay_microseconds(pulse_length_time / 2 - 1);
-                        // fnSystem.digital_write(UART2_TX,0);
+                        // fnSystem.digital_write(PIN_UART2_TX,0);
                         // fnSystem.delay_microseconds(pulse_length_time / 2 - 1);
                     }
                 }
                 // tape_turbo_buffer[tape_turbo_buffer_len].set_bit=1;
                 // tape_turbo_buffer[tape_turbo_buffer_len].wait_microseconds=1;
                 // tape_turbo_buffer_len++;
-                //fnSystem.digital_write(UART2_TX,1);
+                //fnSystem.digital_write(PIN_UART2_TX,1);
                 //fnLedManager.set(eLed::LED_BUS, false);
 
                 // if (offset >= filesize)
@@ -677,15 +676,15 @@ size_t sioCassette::send_FUJI_tape_block(size_t offset)
                     tape_turbo_buffer[tape_turbo_buffer_len].wait_microseconds=edge2_length_time;
                     tape_turbo_buffer_len++;
 
-                    // fnSystem.digital_write(UART2_TX,1);
+                    // fnSystem.digital_write(PIN_UART2_TX,1);
                     // fnSystem.delay_microseconds(edge1_length_time - 1);
-                    // fnSystem.digital_write(UART2_TX,0);
+                    // fnSystem.digital_write(PIN_UART2_TX,0);
                     // fnSystem.delay_microseconds(edge2_length_time - 1);
                 }
                 // tape_turbo_buffer[tape_turbo_buffer_len].set_bit=1;
                 // tape_turbo_buffer[tape_turbo_buffer_len].wait_microseconds=1;
                 // tape_turbo_buffer_len++;
-                //fnSystem.digital_write(UART2_TX,1);
+                //fnSystem.digital_write(PIN_UART2_TX,1);
                 //fnLedManager.set(eLed::LED_BUS, false);
 
 
@@ -721,9 +720,9 @@ size_t sioCassette::send_FUJI_tape_block(size_t offset)
                             tape_turbo_buffer[tape_turbo_buffer_len].set_bit=0;
                             tape_turbo_buffer[tape_turbo_buffer_len].wait_microseconds=edge1_length_time;
                             tape_turbo_buffer_len++;
-                            // fnSystem.digital_write(UART2_TX,1);
+                            // fnSystem.digital_write(PIN_UART2_TX,1);
                             // fnSystem.delay_microseconds(edge1_length_time - 1);
-                            // fnSystem.digital_write(UART2_TX,0);
+                            // fnSystem.digital_write(PIN_UART2_TX,0);
                             // fnSystem.delay_microseconds(edge1_length_time - 1);
                         } else
                         {
@@ -733,9 +732,9 @@ size_t sioCassette::send_FUJI_tape_block(size_t offset)
                             tape_turbo_buffer[tape_turbo_buffer_len].set_bit=0;
                             tape_turbo_buffer[tape_turbo_buffer_len].wait_microseconds=edge2_length_time;
                             tape_turbo_buffer_len++;
-                            // fnSystem.digital_write(UART2_TX,1);
+                            // fnSystem.digital_write(PIN_UART2_TX,1);
                             // fnSystem.delay_microseconds(edge2_length_time - 1);
-                            // fnSystem.digital_write(UART2_TX,0);
+                            // fnSystem.digital_write(PIN_UART2_TX,0);
                             // fnSystem.delay_microseconds(edge2_length_time - 1);
                         }
                         hdr_pwmd->data[cnt_data] <<= 1;
@@ -744,7 +743,7 @@ size_t sioCassette::send_FUJI_tape_block(size_t offset)
                 // tape_turbo_buffer[tape_turbo_buffer_len].set_bit=1;
                 // tape_turbo_buffer[tape_turbo_buffer_len].wait_microseconds=1;
                 // tape_turbo_buffer_len++;
-                //fnSystem.digital_write(UART2_TX,1);
+                //fnSystem.digital_write(PIN_UART2_TX,1);
                 //fnLedManager.set(eLed::LED_BUS, false);
                 Debug_println();
 
@@ -763,8 +762,8 @@ size_t sioCassette::send_FUJI_tape_block(size_t offset)
         //offset += sizeof(struct tape_FUJI_hdr) + len;
     }
     Debug_printf("file finished. %u turbo sequences to send\r\n", tape_turbo_buffer_len);
-    fnSystem.set_pin_mode(UART2_TX, gpio_mode_t::GPIO_MODE_OUTPUT);
-    fnSystem.digital_write(UART2_TX,1);
+    fnSystem.set_pin_mode(PIN_UART2_TX, gpio_mode_t::GPIO_MODE_OUTPUT);
+    fnSystem.digital_write(PIN_UART2_TX,1);
     Debug_println("Turning off Webserver");
     fnHTTPD.stop();
     Debug_printf("Sending turbo data...");
@@ -790,9 +789,10 @@ size_t sioCassette::send_FUJI_tape_block(size_t offset)
         {
             taskENTER_CRITICAL(&myMutex);
             //fnLedManager.set(eLed::LED_BUS, (tape_turbo_buffer[tape_turbo_buffer_pos].set_bit==1));
-            fnSystem.digital_write(UART2_TX,tape_turbo_buffer[tape_turbo_buffer_pos].set_bit);
+            fnSystem.digital_write(PIN_UART2_TX,tape_turbo_buffer[tape_turbo_buffer_pos].set_bit);
             fnSystem.delay_microseconds(tape_turbo_buffer[tape_turbo_buffer_pos].wait_microseconds);
             taskEXIT_CRITICAL(&myMutex);
+            //fnSystem.digital_read()
         }
     }
     fnLedManager.set(eLed::LED_BUS, false);
