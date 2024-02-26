@@ -33,8 +33,6 @@
 //#define CASSETTE_FILE "/test.cas" // zaxxon
 #define CASSETTE_FILE "/csave" // basic program
 
-// copied from fuUART.cpp - figure out better way
-
 #define ESP_INTR_FLAG_DEFAULT 0
 #define BOXLEN 5
 
@@ -474,18 +472,13 @@ size_t sioCassette::send_FUJI_tape_block(size_t offset)
     struct tape_pwmc_hdr *hdr_pwmc  = (struct tape_pwmc_hdr *)atari_sector_buffer;
     struct tape_pwml_hdr *hdr_pwml  = (struct tape_pwml_hdr *)atari_sector_buffer;
     struct tape_pwmd_hdr *hdr_pwmd  = (struct tape_pwmd_hdr *)atari_sector_buffer;
-    uint32_t tape_turbo_buffer_len = 0;
     uint32_t edge1_length_time,edge2_length_time;
-    struct tape_turbo_pwm_sequence *tape_turbo_buffer = (tape_turbo_pwm_sequence *)(malloc(2000000));
     size_t starting_offset = offset;
     uint16_t waitTime;
     bool firstWait = true;
+    uint8_t pin_cmd;
+    uint16_t cnt_timeout;
 
-    if (!tape_turbo_buffer)
-    {
-        Debug_println("Memory allocation failed");
-        return(0);
-    }
     while (offset < filesize) // FileInfo.vDisk->size)
     {
         // looking for a data header while handling baud changes along the way
@@ -592,13 +585,6 @@ size_t sioCassette::send_FUJI_tape_block(size_t offset)
                 samplerate = hdr_pwms->samplerate;
                 // TBD: settings (pulse_type, bit_order)
                 Debug_printf("    Samplerate: %u", samplerate); Debug_println();
-
-                // set SIO port GPIO mode so we can send pulses
-                //fnSystem.set_pin_mode(PIN_UART2_TX, gpio_mode_t::GPIO_MODE_OUTPUT);
-                //fnSystem.digital_write(PIN_UART2_TX,1);
-                // if (offset >= filesize)
-                //     offset = 0;
-                //return(offset);
                 break;        
 
             case FUJI_CHUNK_HEADER_PWMC:
@@ -614,40 +600,19 @@ size_t sioCassette::send_FUJI_tape_block(size_t offset)
                 }
 
                 Debug_println("    silence...");
-                tape_turbo_buffer[tape_turbo_buffer_len].set_bit=0xff;
-                tape_turbo_buffer[tape_turbo_buffer_len].wait_microseconds=hdr_pwmc->silence_length;
-                tape_turbo_buffer_len++;
-//                fnSystem.delay_microseconds(hdr_pwmc->silence_length * 1000);
+                add_pwm_sequence(tape_turbo_action::WAIT_MS,hdr_pwmc->silence_length);
 
                 Debug_println("    pulses...");
-                //fnLedManager.set(eLed::LED_BUS, true);
                 for (uint16_t cnt_data=0; cnt_data<hdr_pwmc->chunk_length/3; cnt_data++)
                 {
                     uint32_t pulse_length_time = hdr_pwmc->data[cnt_data].pulse_length * 1000000 / samplerate;
                     Debug_printf("      Pulse length in us: %u\r\n", pulse_length_time);
                     for (uint16_t cnt_pulses=0; cnt_pulses < hdr_pwmc->data[cnt_data].pulse_count; cnt_pulses++)
                     {
-                        tape_turbo_buffer[tape_turbo_buffer_len].set_bit=1;
-                        tape_turbo_buffer[tape_turbo_buffer_len].wait_microseconds=pulse_length_time / 2 - 1;
-                        tape_turbo_buffer_len++;
-                        tape_turbo_buffer[tape_turbo_buffer_len].set_bit=0;
-                        tape_turbo_buffer[tape_turbo_buffer_len].wait_microseconds=pulse_length_time / 2 - 1;
-                        tape_turbo_buffer_len++;
-                        // fnSystem.digital_write(PIN_UART2_TX,1);
-                        // fnSystem.delay_microseconds(pulse_length_time / 2 - 1);
-                        // fnSystem.digital_write(PIN_UART2_TX,0);
-                        // fnSystem.delay_microseconds(pulse_length_time / 2 - 1);
+                        add_pwm_sequence(tape_turbo_action::SET_BIT, pulse_length_time / 2 - 1);
+                        add_pwm_sequence(tape_turbo_action::CLR_BIT, pulse_length_time / 2 - 1);
                     }
                 }
-                // tape_turbo_buffer[tape_turbo_buffer_len].set_bit=1;
-                // tape_turbo_buffer[tape_turbo_buffer_len].wait_microseconds=1;
-                // tape_turbo_buffer_len++;
-                //fnSystem.digital_write(PIN_UART2_TX,1);
-                //fnLedManager.set(eLed::LED_BUS, false);
-
-                // if (offset >= filesize)
-                //     offset = 0;
-                //return(offset);
                 break;
             case FUJI_CHUNK_HEADER_PWML:
                 Debug_println("  pwml header - sequence of raw PWM states");
@@ -658,39 +623,17 @@ size_t sioCassette::send_FUJI_tape_block(size_t offset)
                 offset += r;
 
                 Debug_println("    silence...");
-                tape_turbo_buffer[tape_turbo_buffer_len].set_bit=0xff;
-                tape_turbo_buffer[tape_turbo_buffer_len].wait_microseconds=hdr_pwml->silence_length;
-                tape_turbo_buffer_len++;
-                //fnSystem.delay_microseconds(hdr_pwml->silence_length * 1000);
-                //fnLedManager.set(eLed::LED_BUS, true);
+                add_pwm_sequence(tape_turbo_action::WAIT_MS, hdr_pwml->silence_length);
                 for (uint16_t cnt_data=0; cnt_data<hdr_pwml->chunk_length/4; cnt_data++)
                 {
                     edge1_length_time = hdr_pwml->data[cnt_data].edge1 * 1000000 / samplerate - 1;
                     edge2_length_time = hdr_pwml->data[cnt_data].edge2 * 1000000 / samplerate - 1;
                     Debug_printf("      Edge1 in us: %u Edge2 in us: %u\r\n", edge1_length_time, edge2_length_time);
 
-                    tape_turbo_buffer[tape_turbo_buffer_len].set_bit=1;
-                    tape_turbo_buffer[tape_turbo_buffer_len].wait_microseconds=edge1_length_time;
-                    tape_turbo_buffer_len++;
-                    tape_turbo_buffer[tape_turbo_buffer_len].set_bit=0;
-                    tape_turbo_buffer[tape_turbo_buffer_len].wait_microseconds=edge2_length_time;
-                    tape_turbo_buffer_len++;
+                    add_pwm_sequence(tape_turbo_action::SET_BIT, edge1_length_time);
+                    add_pwm_sequence(tape_turbo_action::CLR_BIT, edge1_length_time);
 
-                    // fnSystem.digital_write(PIN_UART2_TX,1);
-                    // fnSystem.delay_microseconds(edge1_length_time - 1);
-                    // fnSystem.digital_write(PIN_UART2_TX,0);
-                    // fnSystem.delay_microseconds(edge2_length_time - 1);
                 }
-                // tape_turbo_buffer[tape_turbo_buffer_len].set_bit=1;
-                // tape_turbo_buffer[tape_turbo_buffer_len].wait_microseconds=1;
-                // tape_turbo_buffer_len++;
-                //fnSystem.digital_write(PIN_UART2_TX,1);
-                //fnLedManager.set(eLed::LED_BUS, false);
-
-
-                // if (offset >= filesize)
-                //     offset = 0;
-                //return(offset);
                 break;
 
             case FUJI_CHUNK_HEADER_PWMD:
@@ -701,11 +644,8 @@ size_t sioCassette::send_FUJI_tape_block(size_t offset)
                 r = fread(hdr_pwmd->data, 1, hdr_pwmd->chunk_length, _file);
                 offset += r;
 
-                //fnLedManager.set(eLed::LED_BUS, true);
-                // edge1_length_time = hdr_pwmd->pulse_length_0 * 1000000 / samplerate / 2 - 1;
-                // edge2_length_time = hdr_pwmd->pulse_length_1 * 1000000 / samplerate / 2 - 1;
-                edge1_length_time = hdr_pwmd->pulse_length_0 * 1000000 / samplerate / 2 + 2;
-                edge2_length_time = hdr_pwmd->pulse_length_1 * 1000000 / samplerate / 2 + 2;
+                edge1_length_time = hdr_pwmd->pulse_length_0 * 1000000 / samplerate / 2 - 1;
+                edge2_length_time = hdr_pwmd->pulse_length_1 * 1000000 / samplerate / 2 - 1;
                 Debug_printf("    Edge 0 in us: %u Edge 1 in us: %u\r\n", edge1_length_time, edge2_length_time);
                 Debug_printf("      %u Pulses...", hdr_pwmd->chunk_length);
                 for (uint16_t cnt_data=0; cnt_data<hdr_pwmd->chunk_length; cnt_data++)
@@ -714,43 +654,17 @@ size_t sioCassette::send_FUJI_tape_block(size_t offset)
                     {
                         if (!(hdr_pwmd->data[cnt_data] & 0x80))
                         {
-                            tape_turbo_buffer[tape_turbo_buffer_len].set_bit=1;
-                            tape_turbo_buffer[tape_turbo_buffer_len].wait_microseconds=edge1_length_time;
-                            tape_turbo_buffer_len++;
-                            tape_turbo_buffer[tape_turbo_buffer_len].set_bit=0;
-                            tape_turbo_buffer[tape_turbo_buffer_len].wait_microseconds=edge1_length_time;
-                            tape_turbo_buffer_len++;
-                            // fnSystem.digital_write(PIN_UART2_TX,1);
-                            // fnSystem.delay_microseconds(edge1_length_time - 1);
-                            // fnSystem.digital_write(PIN_UART2_TX,0);
-                            // fnSystem.delay_microseconds(edge1_length_time - 1);
+                            add_pwm_sequence(tape_turbo_action::SET_BIT, edge1_length_time);
+                            add_pwm_sequence(tape_turbo_action::CLR_BIT, edge1_length_time);
                         } else
                         {
-                            tape_turbo_buffer[tape_turbo_buffer_len].set_bit=1;
-                            tape_turbo_buffer[tape_turbo_buffer_len].wait_microseconds=edge2_length_time;
-                            tape_turbo_buffer_len++;
-                            tape_turbo_buffer[tape_turbo_buffer_len].set_bit=0;
-                            tape_turbo_buffer[tape_turbo_buffer_len].wait_microseconds=edge2_length_time;
-                            tape_turbo_buffer_len++;
-                            // fnSystem.digital_write(PIN_UART2_TX,1);
-                            // fnSystem.delay_microseconds(edge2_length_time - 1);
-                            // fnSystem.digital_write(PIN_UART2_TX,0);
-                            // fnSystem.delay_microseconds(edge2_length_time - 1);
+                            add_pwm_sequence(tape_turbo_action::SET_BIT, edge2_length_time);
+                            add_pwm_sequence(tape_turbo_action::CLR_BIT, edge2_length_time);
                         }
                         hdr_pwmd->data[cnt_data] <<= 1;
                     }
                 }
-                // tape_turbo_buffer[tape_turbo_buffer_len].set_bit=1;
-                // tape_turbo_buffer[tape_turbo_buffer_len].wait_microseconds=1;
-                // tape_turbo_buffer_len++;
-                //fnSystem.digital_write(PIN_UART2_TX,1);
-                //fnLedManager.set(eLed::LED_BUS, false);
                 Debug_println();
-
-
-                // if (offset >= filesize)
-                //     offset = 0;
-                //return(offset);
                 break;
 
             default:
@@ -758,10 +672,10 @@ size_t sioCassette::send_FUJI_tape_block(size_t offset)
                 offset += sizeof(struct tape_FUJI_hdr) + len;
                 break;
         }
-        
         //offset += sizeof(struct tape_FUJI_hdr) + len;
     }
     Debug_printf("file finished. %u turbo sequences to send\r\n", tape_turbo_buffer_len);
+    Debug_printf("Buffer size: %u kb\r\n", tape_turbo_buffer_size/1024);
     fnSystem.set_pin_mode(PIN_UART2_TX, gpio_mode_t::GPIO_MODE_OUTPUT);
     fnSystem.digital_write(PIN_UART2_TX,1);
     Debug_println("Turning off Webserver");
@@ -771,28 +685,56 @@ size_t sioCassette::send_FUJI_tape_block(size_t offset)
     portMUX_TYPE myMutex = portMUX_INITIALIZER_UNLOCKED;
     for (uint32_t tape_turbo_buffer_pos=0; tape_turbo_buffer_pos<tape_turbo_buffer_len; tape_turbo_buffer_pos++)
     {
-        if (tape_turbo_buffer[tape_turbo_buffer_pos].set_bit == 0xff)
+        switch (tape_turbo_buffer[tape_turbo_buffer_pos].action)
         {
-            waitTime=tape_turbo_buffer[tape_turbo_buffer_pos].wait_microseconds;
-            fnLedManager.set(eLed::LED_BUS, false);
-            if (firstWait)
-            {
-                if (waitTime>200)
-                    fnSystem.delay_microseconds((waitTime-200)*1000);
-                firstWait=false;
-            } else
-            {
-                if (waitTime>1)
-                    fnSystem.delay_microseconds((waitTime-1)*1000);
-            }
-        } else
-        {
-            taskENTER_CRITICAL(&myMutex);
-            //fnLedManager.set(eLed::LED_BUS, (tape_turbo_buffer[tape_turbo_buffer_pos].set_bit==1));
-            fnSystem.digital_write(PIN_UART2_TX,tape_turbo_buffer[tape_turbo_buffer_pos].set_bit);
-            fnSystem.delay_microseconds(tape_turbo_buffer[tape_turbo_buffer_pos].wait_microseconds);
-            taskEXIT_CRITICAL(&myMutex);
-            //fnSystem.digital_read()
+            case tape_turbo_action::WAIT_MS:
+                waitTime=tape_turbo_buffer[tape_turbo_buffer_pos].wait_microseconds * 1000;
+                fnLedManager.set(eLed::LED_BUS, false);
+                if (firstWait)
+                {
+                    if (waitTime>tape_turbo_buffer_len)
+                        fnSystem.delay_microseconds(waitTime-tape_turbo_buffer_len);
+                    firstWait=false;
+                } else
+                {
+                    if (waitTime>1000)
+                        fnSystem.delay_microseconds(waitTime-1000);
+                }
+                break;
+            case tape_turbo_action::WAIT_US:
+                fnSystem.delay_microseconds(tape_turbo_buffer[tape_turbo_buffer_pos].wait_microseconds);
+                break;
+            case tape_turbo_action::SET_BIT:
+            case tape_turbo_action::CLR_BIT:
+                taskENTER_CRITICAL(&myMutex);
+                //fnLedManager.set(eLed::LED_BUS, (tape_turbo_buffer[tape_turbo_buffer_pos].set_bit==1));
+                tape_turbo_buffer[tape_turbo_buffer_pos].action == tape_turbo_action::SET_BIT ? fnSystem.digital_write(PIN_UART2_TX,1) : fnSystem.digital_write(PIN_UART2_TX,0);
+                fnSystem.delay_microseconds(tape_turbo_buffer[tape_turbo_buffer_pos].wait_microseconds);
+                taskEXIT_CRITICAL(&myMutex);
+                 // If CMD pin goes up
+                if ((tape_turbo_buffer_pos<tape_turbo_buffer_len) && ((pin_cmd = fnSystem.digital_read(PIN_CMD)) == 1))
+                {
+                    Debug_printf("CMD was pulled up, waiting...");
+                    cnt_timeout = 60000; // max. 60s
+                    fnSystem.digital_write(PIN_UART2_TX,0);
+                    while ((pin_cmd == 1) && (cnt_timeout > 0))
+                    {
+                        fnSystem.delay_microseconds(1000);
+                        cnt_timeout--;
+                        pin_cmd = fnSystem.digital_read(PIN_CMD);
+                    }
+                    if (cnt_timeout == 0)
+                    {
+                        Debug_println("CMD timeout, loading canceled");
+                        offset=0;
+                        break;
+                    } else
+                        Debug_printf("\r\nCMD was pulled down again, continue sending turbo data...");
+                }
+                break;
+            default:
+                Debug_println("Unknown turbo action");
+                break;
         }
     }
     fnLedManager.set(eLed::LED_BUS, false);
@@ -915,4 +857,66 @@ uint8_t sioCassette::decode_fsk()
     // #endif
     return out;
 }
+
+bool sioCassette::add_pwm_sequence(enum tape_turbo_action action, uint16_t duration)
+{
+    if (tape_turbo_buffer == nullptr)
+    {
+        Debug_println("First memory allocation");
+        tape_turbo_buffer_size = (tape_turbo_buffer_len+1)*sizeof(tape_turbo_pwm_sequence);
+        tape_turbo_buffer = (tape_turbo_pwm_sequence *)(malloc(tape_turbo_buffer_size));
+        if (!tape_turbo_buffer)
+        {
+            Debug_println("Memory allocation failed");
+            fnSystem.delay_microseconds(3000000);
+            return(false);
+        }
+    }
+    tape_turbo_buffer[tape_turbo_buffer_len].action=action;
+    tape_turbo_buffer[tape_turbo_buffer_len].wait_microseconds=(duration % 256);
+    tape_turbo_buffer_len++;
+    tape_turbo_buffer_size = (tape_turbo_buffer_len+1)*sizeof(tape_turbo_pwm_sequence);
+    tape_turbo_buffer = (tape_turbo_pwm_sequence *)(realloc(tape_turbo_buffer,tape_turbo_buffer_size));
+    if (!tape_turbo_buffer)
+    {
+        Debug_println("Memory allocation failed");
+        fnSystem.delay_microseconds(3000000);
+        return(false);
+    } else
+    {
+        // if ((tape_turbo_buffer_size % 4096) == 0)
+        //     Debug_printf("New buffer size: %u kb\r\n", tape_turbo_buffer_size/1024);
+    }
+    duration -= (duration % 256);
+    while (duration > 0)
+    {
+        // Debug_printf("Duration: %u ", duration);
+        tape_turbo_buffer[tape_turbo_buffer_len].action=tape_turbo_action::WAIT_US;
+        if (duration>255)
+        {
+            tape_turbo_buffer[tape_turbo_buffer_len].wait_microseconds=255;
+            duration-=255;
+        }else
+        {
+            tape_turbo_buffer[tape_turbo_buffer_len].wait_microseconds=duration;
+            duration=0;
+        }
+        tape_turbo_buffer_len++;
+        tape_turbo_buffer_size = (tape_turbo_buffer_len+1)*sizeof(tape_turbo_pwm_sequence);
+        tape_turbo_buffer = (tape_turbo_pwm_sequence *)(realloc(tape_turbo_buffer,tape_turbo_buffer_size));
+        if (!tape_turbo_buffer)
+        {
+            Debug_println("Memory allocation failed");
+            fnSystem.delay_microseconds(3000000);
+            return(false);
+        } else
+        {
+            // if ((tape_turbo_buffer_size % 4096) == 0)
+            //     Debug_printf("New buffer size: %u kb\r\n", tape_turbo_buffer_size/1024);
+        }
+    }
+    return false;
+}
+
+
 #endif /* BUILD_ATARI */

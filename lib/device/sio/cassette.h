@@ -191,11 +191,18 @@ private:
         uint8_t data[];
     } __attribute__((packed));
 
+    enum tape_turbo_action
+    {
+        WAIT_US,
+        WAIT_MS,
+        SET_BIT,
+        CLR_BIT
+    } __attribute__((packed));
     struct tape_turbo_pwm_sequence
     {
-        uint8_t set_bit;
-        uint16_t wait_microseconds;
-    };
+        tape_turbo_action action;
+        uint8_t wait_microseconds;
+    } __attribute__((packed));
 
     struct t_flags
     {
@@ -205,6 +212,10 @@ private:
 
 //    uint8_t atari_sector_buffer[256];
     uint8_t atari_sector_buffer[30000];
+    struct tape_turbo_pwm_sequence *tape_turbo_buffer = nullptr;
+    uint32_t tape_turbo_buffer_len = 0;
+    uint32_t tape_turbo_buffer_size = 0;
+    uint16_t samplerate;
 
     void Clear_atari_sector_buffer(uint16_t len);
 
@@ -215,8 +226,7 @@ private:
     void check_for_FUJI_file();
     size_t send_FUJI_tape_block(size_t offset);
     size_t receive_FUJI_tape_block(size_t offset);
-
-    uint16_t samplerate;
+    bool add_pwm_sequence(enum tape_turbo_action action, uint16_t duration);
 };
 
 #endif
